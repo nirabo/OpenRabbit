@@ -28,6 +28,16 @@ Wrong `--ramcr`. The RCM5700 (no external RAM, on-chip SRAM on /CS3) needs:
 
 The default `0x45` (external RAM on /CS1) hangs at the pilot handshake.
 
+## `Processor verification sequence failed` / `Status line should be low`
+
+SMODE is not high at reset, so the CPU never enters bootstrap. On the Interface
+Board, install the **JP1 pins 1-2** jumper (Program Mode). The programming cable
+also drives SMODE from RTS (RTS low = Program Mode), but on this Interface Board
+that alone was not reliable.
+
+Note: `tty_setbaud()` must use 8N1 (1 stop bit). Older builds set `CSTOPB`
+(2 stop bits), which makes the bootstrap triplets be rejected. Fixed.
+
 ## `Flash write failed` / `NAK for subtype 0x43` (plain `openrabbitfu`)
 
 Expected: the precompiled Dynamic C 9 `pilot.bin` flash driver does not support
@@ -41,7 +51,8 @@ the RCM5700's S29AL008D. Use the RAM programmer instead:
 
 The SDCC crt0's `STACKSEG = 0x76` (physical 0x76000) is invalid on the RCM5700.
 Build with `rcm5700/build.sh`, which patches `STACKSEG` to `0x18`. See
-[building.md](building.md).
+[building.md](building.md). If output is only garbage at first, that is the host
+settling on 38400 baud; the readable text follows.
 
 ## `Failed to sync with the RCM5700 RAM programmer`
 

@@ -51,6 +51,7 @@
 unsigned int verbose;     // Higher values indicate more verbose output
 unsigned int slow;        // Workaround for broken tcdrain() implementations.
 unsigned int ramrun;      // Load the program into RAM and start it from there instead of flashing.
+unsigned long serialbaud = 38400; // Baud rate used by --serialout.
 
 WINDOW *win_watch;
 WINDOW *win_stack;
@@ -450,6 +451,7 @@ void usage(FILE *stream) {
 	fprintf(stream, "--slow              - Use workaround for tcdrain() driver bugs - can make some USB-to-serial converters work.\n");
 	fprintf(stream, "--run               - Run program immediately after programming.\n");
 	fprintf(stream, "--serialout         - Display data from serial line at 38400 baud until EOT.\n");
+	fprintf(stream, "--baud <n>          - Baud rate used by --serialout (default 38400).\n");
 	fprintf(stream, "--ram               - Load the program into RAM and start it there instead of flashing (implies --run).\n");
 	fprintf(stream, "--programmer <p.bin> - RCM5700: run RAM programmer p.bin, then flash the target file to the S29AL008D.\n");
 	fprintf(stream, "--ramcr <i>         - Configure RAM as i instead of default 0x45 (/OE1, /CS1, 2 wait states).\n");
@@ -552,6 +554,15 @@ int main(int argc, char **argv) {
 			}
 			serialout = true;
 		}
+		else if (!strcmp(argv[1], "--baud")) {
+			if (argc <= 2) {
+				usage(stderr);
+				return(-1);
+			}
+			serialbaud = strtoul(argv[2], NULL, 0);
+			memmove(argv + 1, argv + 2, sizeof(char *) * (argc - 2));
+			argc--;
+		}
 		else if (!strcmp(argv[1], "--ram")) {
 			if(!rfu) {
 				usage(stderr);
@@ -603,7 +614,7 @@ int main(int argc, char **argv) {
 			close(tty);
 			return(3);
 		}
-		if(tty_setbaud(tty, 38400)) {
+		if(tty_setbaud(tty, serialbaud)) {
 			close(tty);
 			return(3);
 		}
@@ -619,7 +630,7 @@ int main(int argc, char **argv) {
 				if(ioctl(tty, TIOCMGET, &s) < 0) break;
 				usleep(10);
 			} while ((s & TIOCM_DSR) && ++n < 50000);
-			tty_setbaud(tty, 38400);
+			tty_setbaud(tty, serialbaud);
 			char c;
 			do {
 				if(read(tty, &c, 1) < 1) break;
@@ -660,7 +671,7 @@ int main(int argc, char **argv) {
 				}
 				while ((s & TIOCM_DSR) && ++n < 50000);
 			}
-			tty_setbaud(tty, 38400);
+			tty_setbaud(tty, serialbaud);
 
 			char c;
 			do {

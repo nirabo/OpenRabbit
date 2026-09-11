@@ -51,18 +51,19 @@ Patches **STACKSEG 0x76 → 0x18** (physical 0x18000, on-chip SRAM via the
 
 ### Flash programs — `buildflash.sh`
 
-Patches **MB2CR → MB1CR = 0x43** (`/CS3`) and **STACKSEG 0x76 → 0x40**
-(physical 0x040000, on-chip SRAM via MB1). Used for programs intended to run
-from flash.
+Patches the stock crt0's **`MB2CR = 0x05` (`/CS1` external RAM) to `0x43`
+(`/CS3` on-chip SRAM)**. `STACKSEG` stays `0x76`: with the reset `MECR = 0` the
+stack segment maps to physical `0x80000`, which is in the MB2 bank, so `MB2CR`
+selects the on-chip SRAM.
 
 ```
-./buildflash.sh memtest   # -> memtest-flash.bin
+./buildflash.sh flashtest   # -> flashtest-flash.bin
 ```
 
 > Note: running flashed programs is still unresolved (see
 > [status-and-todo.md](status-and-todo.md)); `buildflash.sh` produces a program
-> that *should* have a valid stack on the RCM5700, but the boot path is not yet
-> verified.
+> that runs correctly when loaded into RAM, but the reset/boot path from flash
+> is not yet working.
 
 A cleaner long-term fix is a custom `crt0`/linker configuration for the RCM5700
 rather than binary patching.

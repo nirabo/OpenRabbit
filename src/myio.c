@@ -188,7 +188,8 @@ int tty_setbaud(int tty, unsigned long baud) {
 	}
   
 	// setup port
-	newtio.c_cflag = CS8 | CLOCAL | CREAD | CSTOPB;
+	memset(&newtio, 0, sizeof(newtio));
+	newtio.c_cflag = CS8 | CLOCAL | CREAD;	// 8 data bits, 1 stop bit, no parity
 	newtio.c_iflag = IGNPAR;
 	newtio.c_oflag = 0;
 	newtio.c_lflag = 0;

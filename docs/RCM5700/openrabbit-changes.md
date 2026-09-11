@@ -45,6 +45,20 @@ if (programmerfile) {
 * New `rcm5700_flash()` — drives the RAM programmer's serial protocol (see
   [flash-protocol.md](flash-protocol.md)): sync, erase, 128-byte program
   chunks, and a full read-back verify.
+* New `rabbit_smode()` — drives SMODE from the cable's RTS line (RTS low =
+  Program Mode / bootstrap, RTS high = Run Mode). Called from `rabbit_open()`
+  (Program Mode) and `rabbit_start()` (Run Mode). Boards that strap SMODE high
+  ignore it.
+
+## `src/myio.c`
+
+* `tty_setbaud()` no longer sets `CSTOPB` (2 stop bits). The Rabbit bootstrap
+  needs 8N1; with 2 stop bits the coldload triplets were frequently rejected.
+  The termios struct is also zero-initialised.
+
+## `src/openrabbit.c`
+
+* New option `--baud <n>` selects the `--serialout` baud rate (default 38400).
 
 ## `src/rabbit.h`
 

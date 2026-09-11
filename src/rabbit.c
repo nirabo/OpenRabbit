@@ -59,7 +59,7 @@ int rabbit_reset(int tty) {
 	}
 
 	if(verbose)
-		fprintf(stderr, "Reset Rabbit.\n");
+		fprintf(stderr, "Reset Rabbit (RTS=%d DTR=%d).\n", !!(s & TIOCM_RTS), !!(s & TIOCM_DTR));
 
 	// Assert DTR (i.e drive /reset low)
 	s |= TIOCM_DTR;
@@ -88,6 +88,34 @@ int rabbit_reset(int tty) {
 	return(0);
 }
 
+// The Rabbit programming cable drives SMODE from RTS (the classic DTR=/RESET,
+// RTS=SMODE wiring). RTS low selects Program Mode (SMODE high -> bootstrap),
+// RTS high selects Run Mode (SMODE low -> boot from flash). Boards that strap
+// SMODE high are unaffected.
+static int rabbit_smode(int tty, int run) {
+	int s;
+
+	if(ioctl(tty, TIOCMGET, &s) < 0) {
+		perror("ioctl(TIOCMGET)");
+		return(-1);
+	}
+
+	if(run)
+		s |= TIOCM_RTS;
+	else
+		s &= ~TIOCM_RTS;
+
+	if(ioctl(tty, TIOCMSET, &s) < 0) {
+		perror("ioctl(TIOCMSET)");
+		return(-1);
+	}
+
+	if(verbose)
+		fprintf(stderr, "SMODE via RTS -> %s\n", run ? "Run Mode (flash boot)" : "Program Mode (bootstrap)");
+
+	return(0);
+}
+
 int rabbit_open(const char *device) {
 	int tty;
 
@@ -96,6 +124,9 @@ int rabbit_open(const char *device) {
 		perror(device);
 		return(tty);
 	}
+
+	// Start in Program Mode (SMODE high) so coldload/bootstrap works.
+	rabbit_smode(tty, 0);
 
 	return(tty);
 }
@@ -798,6 +829,11 @@ int rabbit_start(int tty)
 
 	// Set baudrate back to 2400.
 	if(tty_setbaud(tty, 2400))
+		return(-1);
+
+	// Select Run Mode (SMODE low) so the reset boots the flashed program.
+	// Boards that strap SMODE high ignore this and still need the triplets below.
+	if(rabbit_smode(tty, 1))
 		return(-1);
 
 	if(rabbit_reset(tty))

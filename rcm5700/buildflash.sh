@@ -1,9 +1,10 @@
 #!/bin/bash
 # Build a program intended to run FROM FLASH on the RCM5700. Patches the SDCC
-# crt0 to map the stack/data to the on-chip RAM:
-#   MB2CR=0x05 -> MB1CR=0x43 (/CS3 on-chip RAM)
-#   STACKSEG 0x76 -> 0x40 (physical 0x040000, on-chip RAM via MB1)
-# See docs/RCM5700/building.md. NOTE: booting flashed programs is not yet solved.
+# crt0 so the stack/data live in the on-chip SRAM instead of external RAM:
+#   MB2CR 0x05 (/CS1 external RAM) -> 0x43 (/CS3 on-chip SRAM)
+# STACKSEG stays 0x76: with the reset MECR=0 the stack segment maps to physical
+# 0x80000, which is in the MB2 bank, so MB2CR selects /CS3. See
+# docs/RCM5700/building.md.
 set -e
 name="$1"
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -17,9 +18,7 @@ import sys
 p=sys.argv[1]
 d=bytearray(open(p,'rb').read())
 assert d[0x04]==0x3e and d[0x05]==0x05 and d[0x06]==0xd3 and d[0x07]==0x32 and d[0x08]==0x16, d[0x04:0x0a].hex()
-d[0x05]=0x43; d[0x08]=0x15          # MB1CR = 0x43 (/CS3)
-assert d[0x10]==0x3e and d[0x11]==0x76, d[0x10:0x13].hex()
-d[0x11]=0x40                        # STACKSEG = 0x40
+d[0x05]=0x43                        # MB2CR = 0x43 (/CS3)
 open(p,'wb').write(d)
 print("flash-patched", p)
 PY

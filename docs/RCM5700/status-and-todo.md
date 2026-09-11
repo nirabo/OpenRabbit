@@ -9,33 +9,47 @@
 * **Flash programming.** `--programmer rcm5700/rcmprog.bin` erases, programs and
   fully verifies the S29AL008D. The JEDEC ID (`01 DA`), sector erase and byte
   program are all confirmed.
+* **Flash programs that run from RAM.** `buildflash.sh` + `flashtest.c` produce
+  a program with a valid RCM5700 stack (on-chip SRAM via `MB2CR=0x43`) that
+  prints correctly when loaded with `--ram`.
+
+## Fixed during bring-up
+
+* **Serial framing.** `tty_setbaud()` used `CSTOPB` (2 stop bits). The Rabbit
+  bootstrap needs 8N1; with 2 stop bits the coldload triplets were frequently
+  rejected. Removed.
+* **SMODE / RTS.** The programming cable drives SMODE from RTS (RTS low =
+  Program Mode / bootstrap, RTS high = Run Mode). OpenRabbit now sets this
+  (`rabbit_smode()`), though it is only reliable with the JP1 jumper in place.
+* **`--baud <n>`** added for `--serialout` diagnostics.
 
 ## Not working
 
-* **Booting the flashed image.** After `rabbit_start` (reset + bootstrap-exit
-  triplets) the flashed program does not run. The flash content and address
-  mapping are verified correct; a 63-byte assembly program at flash offset 0
-  produces no output. A cold-boot test with the programming cable attached is
-  inconclusive because the cable appears to hold SMODE in bootstrap.
+* **Booting the flashed image.** Neither a `rabbit_start` reset nor a real
+  Run Mode reset (JP1 removed, power-cycle) runs the flashed program. Reading
+  logical `0x0000` with `MB0CR=/CS0` returns `0xFF`, even though the programmer
+  reads the same flash (offset 0) correctly through the data-segment window at
+  physical `0x100000`. So the reset-time mapping of the parallel flash to
+  logical `0x0000` is not what a naive `MB0CR=/CS0` gives.
 
 ## Next steps (boot issue)
 
-1. **Rabbit 5000 reset/bootstrap.** Re-read the Rabbit 5000 user manual's reset
-   chapter (analogous to the Rabbit 4000 `3resboot.htm`) to confirm exactly
-   where the boot ROM transfers control when SPCR bit 7 is set, and whether the
-   RCM5700 uses top-boot address inversion (top sectors mapped to address 0).
-2. **Try flashing at the top.** The S29AL008D is top-boot; try placing the test
-   program in the top boot sector region and see if it boots.
-3. **RAM trampoline.** Have the programmer copy a tiny routine to the on-chip
-   SRAM, remap `MB0CR`/`MB1CR` to /CS0 and jump to 0 from RAM (the standard
-   Rabbit flash-driver relocation trick). This avoids relying on
-   `rabbit_start`.
-4. **SMODE wiring.** Confirm whether the programming cable drives SMODE; if so,
-   a plain reset will always enter bootstrap and `rabbit_start` is the only way
-   out.
-5. **Compare with Dynamic C.** Look at how Dynamic C's RFU starts a program from
-   flash on the RCM5700 (`_PB_StartRegBiosFLASH` in `pilot.c` is the reference
-   for other boards).
+1. **Replicate the Dynamic C BIOS MMU setup.** `DCRabbit_10`'s
+   `Lib/Rabbit4000/BIOSLIB/StdBios.c` `dkSetMMU` + `MB0CR_SETTING` /
+   `MECR_VALUE (0x20)` / `FLASH_WSTATES` (from the ID block `flashMBC`) is the
+   authoritative sequence. In particular check `MB0CR_INVRT_A18/A19` and
+   `MACR` (8- vs 16-bit) for the RCM5700.
+2. **Read the flash through the same window the programmer uses.** Confirm
+   whether physical `0x000000` and physical `0x100000` really alias (i.e. the
+   flash decodes only `A[19:0]`), or whether the board gates `/CS0` on a bank
+   select bit.
+3. **RAM trampoline.** `rcm5700/flashboot.s` remaps `MB0CR` from the stack
+   segment and jumps to 0; the remap code runs (verified with serial markers)
+   but the flash read at 0 still returns `0xFF`. Finish once (1)/(2) are known.
+4. **ID block.** Inspect the RCM5700 System ID block (`flashMBC`, memory
+   config); a boot ROM may consult it before/independently of the reset fetch.
+5. **JP1.** Programming reliably needs the JP1 1-2 jumper installed (Program
+   Mode); RTS alone is not dependable on this Interface Board.
 
 ## Cleanups / improvements
 
