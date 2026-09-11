@@ -12,6 +12,13 @@
 * **Flash programs that run from RAM.** `buildflash.sh` + `flashtest.c` produce
   a program with a valid RCM5700 stack (on-chip SRAM via `MB2CR`) that prints
   correctly when loaded with `--ram`.
+* **Booting from flash (the breakthrough).** A program at flash offset 0 *does*
+  execute, but only in true Run Mode: **JP1 pins 1-2 removed** and the board
+  powered from **J6 (+5 V)**, not USB. `rcm5700/bootbeacon.s` (a hand-written
+  offset-0 image) makes the STATUS pin toggle, read via the cable's DSR. The
+  earlier failures were entirely the mode: RTS does **not** control SMODE on
+  this board (JP1 does), and USB power reboots the board ~2 s after startup in
+  Run Mode.
 
 ## Fixed during bring-up
 
@@ -25,11 +32,18 @@
 
 ## Not working
 
-* **Booting the flashed image.** Neither a `rabbit_start` reset nor a real
-  Run Mode reset (JP1 removed, power-cycle) runs a program placed at flash
-  offset 0. A 59-byte "beacon" that emits `X` at the reset clock
-  (`rcm5700/flashbeacon.s`) produced **0 bytes at every baud (300-115200) and
-  both RTS states**, so the CPU is not executing flash offset 0 at all.
+* **Serial output from a flash boot.** `boothello.s` runs (STATUS goes high)
+  but no bytes reach the host on any baud 300-115200, with or without waiting
+  on `SASR`. The offset-0 asm sets `GCSR=0x08`, `MTCR=0x0C`, `GCDR=0x07`,
+  `TACR=0`, `TAPR=1`, `TACSR=1`, `TAT4R=40`, `PCFR=0x40`, `SACR=0x01`. Either
+  the baud clock still is not running or serial A TX is not routed to the
+  cable in Run Mode. This is the next thing to solve; STATUS is the only
+  reliable output channel from a flash boot so far.
+* **SDCC programs from flash.** `ramhello-flash.bin` (built with
+  `buildflash.sh`) does not run from a cold flash boot, most likely because the
+  SDCC crt0 only sets `MB2CR`/`SEGSIZE`/`STACKSEG` and relies on a BIOS that
+  sets up `MECR`, the bank control registers and the clock. A DC-BIOS-style
+  preamble (like `boothello.s`) is needed in front of SDCC programs.
 
 ### Reproducing the flash-boot test
 
@@ -111,37 +125,32 @@ What DC10 *does* give us is the authoritative **boot contract** and the
 **detection technique**, both captured above and in
 [investigation-log.md](investigation-log.md). Use those, not the compiler.
 
-## Next steps (boot issue)
+## Next steps
 
-The decisive question is no longer "is the image correct" but **"does the CPU
-execute flash offset 0 at all?"**. Evidence so far says it does not, and the
-most likely reason is that the board is still in **bootstrap mode** during our
-tests (see investigation-log section 10): with RTS asserted ("Run Mode") the
-target still executed GOCR bootstrap triplets, and a STATUS beacon/blink placed
-at offset 0 was never observed.
+The mode question is settled: with **JP1 1-2 removed** and **J6 +5 V power**,
+flash offset 0 executes. The remaining work is (a) getting serial out of a
+flash boot and (b) getting full SDCC programs to run.
 
-1. **Get the module into true Run Mode.** JP1 (or whatever straps SMODE0/1)
-   must select Run Mode, and the programming cable must not hold SMODE. Test
-   with the AC adapter and a *separate* serial connection so the cable cannot
-   influence the SMODE/STATUS lines. Confirm with
-   `python3 rcm5700/statusread.py --rts run`: after a Run-Mode reset the
-   `statusbeacon.s`/`statusblink.s` image should drive STATUS; today it does
-   not.
-2. **Check `SYSCFG0`/`SYSCFG1` strapping** on the RCM5700 module schematic. If
-   `SYSCFG0` is high, reset MB0 = `/CS3` internal SRAM and a bare program at
-   flash offset 0 can never boot.
-3. **Definitive test independent of serial/STATUS:** have the offset-0 image
-   erase and program a marker into a spare flash sector (e.g. `0x80000`, which
-   the scan showed blank), then read it back with the programmer. A marker
-   proves execution; a blank sector proves the CPU never fetched offset 0.
-4. **Once offset 0 is confirmed, flash a complete image**, i.e. a DC10-style
-   boot preamble (`MACR`/`MMIDR`/`EDMR`, `MECR`/`SEGSIZE`/`DATASEG`, `MB0..3CR`,
-   clock, stack) followed by the program. A bare SDCC program does not include
-   the BIOS that normally does this.
-5. **Verify the ID block** at the top of flash (marker `55 AA 55 AA ...`).
+1. **Fix serial output from a flash boot.** `boothello.s` reaches its STATUS
+   instruction but emits nothing. Candidates, in order:
+   * The baud clock is still not running. Verify `GCSR`/`GCDR`/`MTCR` and the
+     Timer A setup (`TACR`/`TAPR`/`TACSR`/`TAT4R`) against a Dynamic C image
+     that prints in Run Mode.
+   * Serial A TX is not routed to the cable in Run Mode. Test by using a
+     separate UART on another port (e.g. serial B on PC4/PC5) or by probing
+     PC6 with a scope/logic analyser.
+   * `SACR` value (`0x00` vs `0x01`) and `PCFR` bit 6.
+2. **Build a DC-BIOS-style boot preamble in front of SDCC programs.** The SDCC
+   crt0 only sets `MB2CR`/`SEGSIZE`/`STACKSEG`; it relies on a BIOS to set
+   `MECR`, `MB0..3CR`, `DATASEG` and the clock. `boothello.s` shows the
+   preamble; the next step is to jump from it into an SDCC image (linked at a
+   small offset) or to patch the crt0.
+3. **Cable-independent marker test** (still worth doing as a cross-check): have
+   the offset-0 image erase and program a marker into a spare flash sector
+   (e.g. `0x80000`, blank per the scan), then read it back with the programmer.
+4. **Verify the ID block** at the top of flash (marker `55 AA 55 AA ...`).
    `rcm5700/rcmflash.c` read `4A 00 4A 00 4A 00` at `0xFFFFA`, which is not the
-   documented marker, so the top of flash may not hold a valid ID block. This
-   does not affect the hardware boot (the CPU does not read it) but breaks
+   documented marker. This does not affect the hardware boot but breaks
    Dynamic C / RFU identification.
 
 ## Cleanups / improvements

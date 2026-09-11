@@ -223,6 +223,42 @@ holding SMODE.
   program a marker into a spare flash sector and read it back with the
   programmer.
 
+## 11. Breakthrough: flash boot works in true Run Mode
+
+The RCM5700/RCM6700 User's Manual (90001191) settled the mode question:
+
+* **Program Mode** = SMODE pins pulled to +3.3 V, which happens when **JP1 pins
+  1-2 are jumpered**.
+* **Run Mode** = remove the JP1 pins 1-2 jumper; SMODE is pulled low and the
+  Rabbit 5000 boots from flash after reset.
+* With the **USB cable** supplying power in Run Mode, the MiniCore **reboots
+  ~2 s after startup**. Use the **AC adapter / 5 V on J6**, or a power-only USB
+  cable. J6 input is **+5 V DC** (module runs on 3.3 V from the on-board
+  regulator).
+
+So RTS never controlled SMODE (section 10b) - JP1 does. With **JP1 removed**
+and the board powered from **J6**, `rcm5700/bootbeacon.s` (offset-0 image that
+toggles STATUS) made the cable's DSR toggle continuously (~20 ms) - the CPU is
+executing flash offset 0. A `statusbeacon` image (STATUS held high) reads as a
+steady DSR. The earlier "0 bytes" results were all bootstrap-mode runs.
+
+## 12. Open issue: no serial from a flash boot
+
+`boothello.s` is a hand-written offset-0 image that replicates the DC BIOS
+init (`MACR`/`MMIDR`/`EDMR`, `MECR`/`SEGSIZE`/`DATASEG`, `MB0..3CR`,
+`GCSR=0x08`, `MTCR=0x0C`, `GCDR=0x07`) and then sets up serial A
+(`PCFR=0x40`, `TACR=0`, `TAPR=1`, `TACSR=1`, `TAT4R=40`, `SACR=0x01`) and
+prints `HI`. It **runs** (STATUS goes high) but emits **no bytes** on any baud
+300-115200, even with the `SASR` wait removed. So either the Timer A4 baud
+clock is still not running, or serial A TX is not reaching the cable in Run
+Mode. This is the next thing to solve; STATUS is currently the only reliable
+output channel from a flash boot.
+
+`ramhello-flash.bin` (SDCC, built with `buildflash.sh`) also does not run from
+a cold flash boot: the SDCC crt0 only sets `MB2CR`/`SEGSIZE`/`STACKSEG` and
+relies on a BIOS to set `MECR`, the bank registers and the clock. A
+DC-BIOS-style preamble in front of SDCC programs is the next step.
+
 ## Dead ends worth remembering
 
 * The FT232R + hub USB drop is real and needs a direct port / better adapter.

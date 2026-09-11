@@ -11,13 +11,17 @@ RAM-resident flash programmer built for it.
 | Identify the RCM5700 (CPU + flash info) | **Works** |
 | Run an SDCC program from the on-chip 128 KB SRAM | **Works** |
 | Erase / program / verify the S29AL008D flash | **Works** |
-| Run the flashed program after `rabbit_start` | **Not working yet** |
+| Execute a program at flash offset 0 (true Run Mode) | **Works** |
+| Serial output from a flash boot | **Not working yet** |
 
-The flash programming itself is complete and verified; the open issue is
-getting the Rabbit 5000 to *boot* the freshly flashed image. The current
-evidence is that the board stays in the SMODE bootstrap during our tests
-(RTS does not switch it to Run Mode), so flash offset 0 is never executed.
-See [status-and-todo.md](status-and-todo.md) and investigation-log section 10.
+The flash programming itself is complete and verified. Flash **boot** works too:
+with **JP1 pins 1-2 removed** (Run Mode) and the board powered from **J6
+(+5 V)**, a program at flash offset 0 executes (`rcm5700/bootbeacon.s` toggles
+STATUS). Two things defeated earlier attempts: RTS does **not** control SMODE
+(JP1 does), and USB power reboots the board ~2 s after startup in Run Mode.
+The open issue is now getting **serial output** from a flash boot and running
+full SDCC programs (which need a DC-BIOS-style preamble). See
+[status-and-todo.md](status-and-todo.md).
 
 ## Quick start
 
@@ -67,6 +71,8 @@ rcm5700/                 helper programs and build scripts (see building.md)
   flashbeacon.s          minimal offset-0 beacon (emits 'X' at the reset clock)
   statusbeacon.s         offset-0 test: drives STATUS high if it runs
   statusblink.s          offset-0 test: toggles STATUS slowly if it runs
+  bootbeacon.s           offset-0 image: toggles STATUS + emits serial (proves flash boot)
+  boothello.s            offset-0 image: full DC-BIOS-style init, then prints "HI"
   statusread.py          reads STATUS (cable DSR) after a reset
   serialcap.py           DTR/RTS-aware serial capture helper
   build.sh               build a RAM program (patches crt0 STACKSEG)
