@@ -40,3 +40,4 @@ coldboot/coldload.no3.bin
 coldboot/makecold
 examples/*/*.bin
 src/openrabbit
+src/openrabbitfu

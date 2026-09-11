@@ -1,0 +1,17 @@
+# Build intermediates
+*.rel
+*.ihx
+*.asm
+*.lst
+*.map
+*.sym
+*.noi
+*.lk
+
+# Generated binaries (keep the committed programmer and the tiny asm test)
+*.bin
+!rcmprog.bin
+!tiny.bin
+
+# The root .gitignore ignores all Makefiles; keep this one.
+!Makefile

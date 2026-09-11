@@ -1,0 +1,76 @@
+# RCM5700 / Rabbit 5000 support in OpenRabbit
+
+This directory documents the work done to make OpenRabbit talk to a
+**Digi Rabbit RCM5700W** (Rabbit 5000) from Linux, and the custom
+RAM-resident flash programmer built for it.
+
+## TL;DR
+
+| Capability | Status |
+|---|---|
+| Identify the RCM5700 (CPU + flash info) | **Works** |
+| Run an SDCC program from the on-chip 128 KB SRAM | **Works** |
+| Erase / program / verify the S29AL008D flash | **Works** |
+| Run the flashed program after `rabbit_start` | **Not working yet** |
+
+The flash programming itself is complete and verified; the open issue is
+getting the Rabbit 5000 to *boot* the freshly flashed image (see
+[status-and-todo.md](status-and-todo.md)).
+
+## Quick start
+
+Build OpenRabbit as usual (`autoreconf -i && ./configure && make`). Then,
+with the official FT232R USB programming cable on `/dev/ttyUSB0`:
+
+```sh
+# Identify the target (RCM5700 needs --ramcr 0x43: on-chip RAM, no external RAM)
+./src/openrabbitfu --verbose --slow --ramcr 0x43 /path/to/any.bin /dev/ttyUSB0
+
+# Run a program from the on-chip SRAM (no flashing)
+./src/openrabbitfu --slow --ramcr 0x43 --ram --serialout \
+    rcm5700/ramhello.bin /dev/ttyUSB0
+
+# Erase, program and verify the flash, then reboot
+./src/openrabbitfu --slow --ramcr 0x43 \
+    --programmer rcm5700/rcmprog.bin \
+    --serialout /path/to/target.bin /dev/ttyUSB0
+```
+
+`rcm5700/rcmprog.bin` is the prebuilt RAM flash programmer. Its source is
+`rcm5700/rcmprog.c`; see [building.md](building.md) to rebuild it.
+
+## Documents
+
+* [hardware.md](hardware.md) — RCM5700/Rabbit 5000 hardware, flash part and memory map.
+* [openrabbit-changes.md](openrabbit-changes.md) — the host-side changes (`--ram`, `--programmer`).
+* [flash-protocol.md](flash-protocol.md) — the serial protocol used by the RAM programmer.
+* [building.md](building.md) — building the helper programs with SDCC, incl. the crt0 patch.
+* [investigation-log.md](investigation-log.md) — how we got here, with evidence.
+* [status-and-todo.md](status-and-todo.md) — what works, what does not, next steps.
+* [troubleshooting.md](troubleshooting.md) — common failure modes.
+
+## Directory layout
+
+```
+rcm5700/                 helper programs and build scripts (see building.md)
+  rcmprog.c/.bin         RAM-resident S29AL008D flash programmer (the deliverable)
+  rcmflash.c             on-target self test (destructive: erases sector 0)
+  flashid.c              reads the JEDEC flash ID
+  flashscan.c            scans the flash for non-blank regions
+  readtest.c             reads flash at several bank mappings
+  memtest.c              probes which bank exposes the on-chip SRAM
+  ramhello.c             minimal RAM-run test ("RCM5700 RAM OK")
+  tiny.s/.bin            hand-written asm boot test (emits 'A')
+  build.sh               build a RAM program (patches crt0 STACKSEG)
+  buildflash.sh          build a flash program (patches crt0 for RCM5700)
+docs/RCM5700/            this documentation
+```
+
+## Important warning
+
+The flash programmer is **destructive**. The self-test `rcmflash.c` and the
+flashing flow erase flash sectors. During development the first flash sector
+of the test board was erased/overwritten, so the board's original firmware no
+longer boots. Re-flash the original image with Dynamic C / the Digi RFU if you
+need it back. Cold-boot mode (the SMODE bootstrap) is in the CPU ROM and is
+unaffected, so the board can always be re-flashed.

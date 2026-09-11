@@ -563,6 +563,7 @@ int rabbit_upload(int tty, const char *projectfilename, bool dc8pilot) {
 		uint16_t writeMode;	// just a byte
 	} flashdata;
 	uint32_t flash;
+	unsigned long wp_data_org = ramrun ? 0x0UL : WP_DATA_ORG;
 	int sz, i, l;
 	int rs, ws;
 
@@ -622,14 +623,16 @@ int rabbit_upload(int tty, const char *projectfilename, bool dc8pilot) {
 	}
 
 	// send flashdata
-	flashdata.sectorSize = info.IDBlock.sectorSize;
-	flashdata.numSectors = info.IDBlock.numSectors;
-	flashdata.flashSize = info.IDBlock.flashSize;
-	flashdata.writeMode = 1;	// just a byte
-	if(!rabbit_write(tty, TC_TYPE_SYSTEM, TC_SYSTEM_FLASHDATA, sizeof(flashdata), &flashdata))
-		return(-1);
-	if(rabbit_read(tty, TC_TYPE_SYSTEM, TC_SYSTEM_FLASHDATA, 0, NULL))
-		return(-1);
+	if(!ramrun) {
+		flashdata.sectorSize = info.IDBlock.sectorSize;
+		flashdata.numSectors = info.IDBlock.numSectors;
+		flashdata.flashSize = info.IDBlock.flashSize;
+		flashdata.writeMode = 1;	// just a byte
+		if(!rabbit_write(tty, TC_TYPE_SYSTEM, TC_SYSTEM_FLASHDATA, sizeof(flashdata), &flashdata))
+			return(-1);
+		if(rabbit_read(tty, TC_TYPE_SYSTEM, TC_SYSTEM_FLASHDATA, 0, NULL))
+			return(-1);
+	}
 
 	// load user program
 	bool ihex_format = fileext_is (projectfilename, ".ihx") || fileext_is (projectfilename, ".hex");
@@ -658,11 +661,13 @@ int rabbit_upload(int tty, const char *projectfilename, bool dc8pilot) {
         	fprintf(stderr, "Erasing Flash.\n");
 
 	// erase flash
-	flash = WP_DATA_SIZE+sz;
-	if(!rabbit_write(tty, TC_TYPE_SYSTEM, TC_SYSTEM_ERASEFLASH, sizeof(flash), &flash))
-		return(-1);
-	if(rabbit_read(tty, TC_TYPE_SYSTEM, TC_SYSTEM_ERASEFLASH, 0, NULL))
-		return(-1);
+	if(!ramrun) {
+		flash = WP_DATA_SIZE+sz;
+		if(!rabbit_write(tty, TC_TYPE_SYSTEM, TC_SYSTEM_ERASEFLASH, sizeof(flash), &flash))
+			return(-1);
+		if(rabbit_read(tty, TC_TYPE_SYSTEM, TC_SYSTEM_ERASEFLASH, 0, NULL))
+			return(-1);
+	}
 
 	// allocate memory
 	wp = malloc(TC_SYSTEM_WRITE_HEADERSIZE+WP_DATA_SIZE+64*1024);
@@ -679,7 +684,7 @@ int rabbit_upload(int tty, const char *projectfilename, bool dc8pilot) {
 		// create write header
 		((_TCSystemWRITE*)wp)->type = TC_SYSWRITE_PHYSICAL;
 		((_TCSystemWRITE*)wp)->length = l;
-		((_TCSystemWRITE*)wp)->address.physical = WP_DATA_ORG + i;
+		((_TCSystemWRITE*)wp)->address.physical = wp_data_org + i;
 		
 		// fix alignment
 		memmove(wp+1, wp+2, 6);
@@ -801,6 +806,134 @@ int rabbit_start(int tty)
 	if(rabbit_triplets(tty, start, sizeof(start) / 3))
 		return(-1);
 
+	return(0);
+}
+
+// Ask the (still running) secondary loader to jump to a program that was
+// written into RAM. The loader does not acknowledge this request: it jumps
+// away immediately.
+int rabbit_start_ram(int tty)
+{
+	const uint8_t start = TC_STARTBIOS_RAM;
+
+	if(!rabbit_write(tty, TC_TYPE_SYSTEM, TC_SYSTEM_STARTBIOS, sizeof(start), &start))
+		return(-1);
+
+	return(0);
+}
+
+// Read exactly count bytes, giving up after ms milliseconds. Returns the number
+// of bytes read, or -1 if nothing was read before the timeout.
+static int serial_read_timeout(int tty, void *buf, size_t count, int ms)
+{
+	int got = 0;
+	unsigned char *p = buf;
+
+	while(got < (int)count) {
+		struct timeval tv;
+		fd_set f;
+		tv.tv_sec = ms / 1000;
+		tv.tv_usec = (ms % 1000) * 1000;
+		FD_ZERO(&f);
+		FD_SET(tty, &f);
+		int r = select(tty + 1, &f, NULL, NULL, &tv);
+		if(r <= 0)
+			return(got ? got : -1);
+		r = read(tty, p + got, count - got);
+		if(r <= 0)
+			return(got ? got : -1);
+		got += r;
+	}
+	return(got);
+}
+
+int rcm5700_flash(int tty, const char *targetfile)
+{
+	int sz;
+	unsigned char *pb = load(NULL, targetfile, &sz);
+	if(!pb) {
+		fprintf(stderr, "Failed to open file %s.\n", targetfile);
+		return(-1);
+	}
+
+	// Sync: send 0x55 until the programmer answers 0xAA.
+	int synced = 0;
+	for(int i = 0; i < 200 && !synced; i++) {
+		unsigned char c = 0x55, r;
+		if(dwrite(tty, &c, 1) != 1)
+			break;
+		if(serial_read_timeout(tty, &r, 1, 100) == 1 && r == 0xAA)
+			synced = 1;
+	}
+	if(!synced) {
+		fprintf(stderr, "Failed to sync with the RCM5700 RAM programmer.\n");
+		free(pb);
+		return(-1);
+	}
+
+	if(verbose)
+		fprintf(stderr, "Erasing %d bytes...\n", sz);
+
+	// Erase all sectors covering [0, sz).
+	{
+		unsigned char cmd[5], ack;
+		uint32_t s = (uint32_t)sz;
+		cmd[0] = 'E';
+		memcpy(cmd + 1, &s, 4);
+		if(dwrite(tty, cmd, 5) != 5 || serial_read_timeout(tty, &ack, 1, 60000) != 1 || ack != 0x06) {
+			fprintf(stderr, "Flash erase failed.\n");
+			free(pb);
+			return(-1);
+		}
+	}
+
+	// Program in 128 byte chunks.
+	for(int i = 0; i < sz; i += 128) {
+		int l = (sz - i) < 128 ? (sz - i) : 128;
+		unsigned char hdr[7], ack;
+		uint32_t a = (uint32_t)i;
+		uint16_t len = (uint16_t)l;
+		hdr[0] = 'W';
+		memcpy(hdr + 1, &a, 4);
+		memcpy(hdr + 5, &len, 2);
+		if(dwrite(tty, hdr, 7) != 7 || dwrite(tty, pb + i, l) != l) {
+			fprintf(stderr, "Flash write failed (I/O error).\n");
+			free(pb);
+			return(-1);
+		}
+		if(serial_read_timeout(tty, &ack, 1, 30000) != 1 || ack != 0x06) {
+			fprintf(stderr, "Flash write failed (no ACK at offset %d).\n", i);
+			free(pb);
+			return(-1);
+		}
+		if(verbose)
+			fprintf(stderr, "flashing... %d%%\r", (i + l) * 100 / sz);
+	}
+
+	// Verify.
+	for(int i = 0; i < sz; i += 128) {
+		int l = (sz - i) < 128 ? (sz - i) : 128;
+		unsigned char hdr[7], buf[128];
+		uint32_t a = (uint32_t)i;
+		uint16_t len = (uint16_t)l;
+		hdr[0] = 'R';
+		memcpy(hdr + 1, &a, 4);
+		memcpy(hdr + 5, &len, 2);
+		if(dwrite(tty, hdr, 7) != 7 || serial_read_timeout(tty, buf, l, 30000) != l) {
+			fprintf(stderr, "Flash verify read failed at offset %d.\n", i);
+			free(pb);
+			return(-1);
+		}
+		if(memcmp(buf, pb + i, l)) {
+			fprintf(stderr, "Flash verify mismatch at offset %d.\n", i);
+			free(pb);
+			return(-1);
+		}
+	}
+
+	free(pb);
+	if(verbose)
+		fprintf(stderr, "\nFlash verified OK (%d bytes).\n", sz);
 	return(0);
 }
 

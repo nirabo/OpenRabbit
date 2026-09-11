@@ -44,8 +44,15 @@ int rabbit_program(int tty, int ramcr, const char *coldload, const char *pilot, 
 // Start program in flash.
 int rabbit_start(int tty);
 
+// Start a program that has been loaded into RAM.
+int rabbit_start_ram(int tty);
+
+// Flash a program onto an RCM5700 (Rabbit 5000) using the RAM-resident programmer.
+int rcm5700_flash(int tty, const char *targetfile);
+
 extern unsigned int verbose;
 extern unsigned int slow;
+extern unsigned int ramrun;
 
 #endif
 

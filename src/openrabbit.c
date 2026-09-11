@@ -50,6 +50,7 @@
 
 unsigned int verbose;     // Higher values indicate more verbose output
 unsigned int slow;        // Workaround for broken tcdrain() implementations.
+unsigned int ramrun;      // Load the program into RAM and start it from there instead of flashing.
 
 WINDOW *win_watch;
 WINDOW *win_stack;
@@ -449,6 +450,8 @@ void usage(FILE *stream) {
 	fprintf(stream, "--slow              - Use workaround for tcdrain() driver bugs - can make some USB-to-serial converters work.\n");
 	fprintf(stream, "--run               - Run program immediately after programming.\n");
 	fprintf(stream, "--serialout         - Display data from serial line at 38400 baud until EOT.\n");
+	fprintf(stream, "--ram               - Load the program into RAM and start it there instead of flashing (implies --run).\n");
+	fprintf(stream, "--programmer <p.bin> - RCM5700: run RAM programmer p.bin, then flash the target file to the S29AL008D.\n");
 	fprintf(stream, "--ramcr <i>         - Configure RAM as i instead of default 0x45 (/OE1, /CS1, 2 wait states).\n");
 	fprintf(stream, "--coldload <cl.bin> - Use provided cl.bin instead of built-in primary loader.\n");
 	fprintf(stream, "--pilot <pilot.bin> - Use provided pilot.bin instead of built-in secondary loader.\n");
@@ -476,6 +479,7 @@ int main(int argc, char **argv) {
 	int ramcr = 0x45; // Change default to -1, once we support autodetection.
 	const char *coldloadfilename = NULL;
 	const char *pilotfilename = NULL;
+	const char *programmerfile = NULL;
 
 	// Are we the just the rfu?
 	if(strlen(argv[0]) >= strlen("openrabbitfu") && !strcmp(argv[0]+strlen(argv[0]) - strlen("openrabbitfu"), "openrabbitfu"))
@@ -520,6 +524,17 @@ int main(int argc, char **argv) {
 			memmove(argv + 1, argv + 2, sizeof(char *) * (argc - 2));
 			argc--;
 		}
+		else if (!strcmp(argv[1], "--programmer")) {
+			if (argc <= 2) {
+				usage(stderr);
+				return(-1);
+			}
+			programmerfile = argv[2];
+			ramrun = 1;
+			run = 1;
+			memmove(argv + 1, argv + 2, sizeof(char *) * (argc - 2));
+			argc--;
+		}
 		else if (!strcmp(argv[1], "--slow")) {
 			slow++;
 		}
@@ -536,6 +551,14 @@ int main(int argc, char **argv) {
 				return(-1);
 			}
 			serialout = true;
+		}
+		else if (!strcmp(argv[1], "--ram")) {
+			if(!rfu) {
+				usage(stderr);
+				return(-1);
+			}
+			ramrun = 1;
+			run = true;
 		}
 		else {
 			fprintf(stderr, "Unknown option: %s\n", argv[1]);
@@ -567,15 +590,57 @@ int main(int argc, char **argv) {
 	}
 
 	// program the damn thing
-	if(rabbit_program(tty, ramcr, coldloadfilename, pilotfilename, argv[1], &dc8pilot)) {
+	const char *loadfile = programmerfile ? programmerfile : argv[1];
+	if(rabbit_program(tty, ramcr, coldloadfilename, pilotfilename, loadfile, &dc8pilot)) {
 		close(tty);
 		return(3);
 	}
 
+	// RCM5700: run the RAM programmer, stream the target image into flash, then reboot.
+	if(programmerfile) {
+		puts("Starting RAM programmer.");
+		if(rabbit_start_ram(tty)) {
+			close(tty);
+			return(3);
+		}
+		if(tty_setbaud(tty, 38400)) {
+			close(tty);
+			return(3);
+		}
+		if(rcm5700_flash(tty, argv[1])) {
+			close(tty);
+			return(3);
+		}
+		puts("Rebooting and running flashed code.");
+		rabbit_start(tty);
+		if(serialout) {
+			int s, n = 0;
+			do {
+				if(ioctl(tty, TIOCMGET, &s) < 0) break;
+				usleep(10);
+			} while ((s & TIOCM_DSR) && ++n < 50000);
+			tty_setbaud(tty, 38400);
+			char c;
+			do {
+				if(read(tty, &c, 1) < 1) break;
+				putchar(c);
+			} while (c != 4);
+		}
+		close(tty);
+		return(0);
+	}
+
 	// Start program if requested
 	if(run) {
-		puts("Rebooting and running installed code.");
-		int ret = rabbit_start(tty);
+		int ret;
+		if(ramrun) {
+			puts("Starting program in RAM.");
+			ret = rabbit_start_ram(tty);
+		}
+		else {
+			puts("Rebooting and running installed code.");
+			ret = rabbit_start(tty);
+		}
 
 		// Show data received on serial line
 	        if(serialout) {
@@ -585,7 +650,7 @@ int main(int argc, char **argv) {
 			// we'd need to wait a bit to not mess up sent triplets still in the buffer, but waiting too long means that we loose data from the user program.
 			// There is no magic wait time that works for all USB-serial-converter / driver / OS combinations). But Linux does not support separate input / output baud rates.
 			{
-				int s;
+				int s, n = 0;
 				do {
 					if(ioctl(tty, TIOCMGET, &s) < 0) {
 						perror("ioctl(TIOCMGET)");
@@ -593,7 +658,7 @@ int main(int argc, char **argv) {
 					}
 					usleep (10);
 				}
-				while (s & TIOCM_DSR);
+				while ((s & TIOCM_DSR) && ++n < 50000);
 			}
 			tty_setbaud(tty, 38400);
 
