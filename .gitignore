@@ -41,3 +41,13 @@ coldboot/makecold
 examples/*/*.bin
 src/openrabbit
 src/openrabbitfu
+
+# Dynamic C build artifacts
+DC.OUT
+*.BDL
+*.HDL
+*.HEX
+*.UPL
+*.brk
+*.org
+*.rom
