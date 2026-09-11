@@ -130,6 +130,41 @@ So the flash content and mapping look right; the remaining problem is how the
 Rabbit 5000 leaves bootstrap / boots from flash. See
 [status-and-todo.md](status-and-todo.md).
 
+## 8. Fixes found later (framing, SMODE)
+
+While trying to make the flashed image run, three host-side problems surfaced:
+
+* **`tty_setbaud()` set `CSTOPB` (2 stop bits).** The Rabbit bootstrap is 8N1;
+  with 2 stop bits the coldload triplets were frequently rejected. After
+  removing it, programming became reliable. (`src/myio.c`)
+* **SMODE was never driven.** The programming cable can drive SMODE from RTS
+  (RTS low = Program Mode, RTS high = Run Mode). Added `rabbit_smode()` and
+  called it from `rabbit_open()` / `rabbit_start()`. On this Interface Board it
+  only worked reliably with the JP1 1-2 jumper installed. (`src/rabbit.c`)
+* **`buildflash.sh` was wrong.** The stock crt0 maps the stack to external RAM
+  on `/CS1`; for the RCM5700 it must use the on-chip SRAM. It now patches
+  `MB2CR 0x05 -> 0x43`. The resulting program (`flashtest.c`) runs correctly
+  when loaded with `--ram`.
+
+## 9. Flash-boot investigation (open)
+
+A 59-byte **beacon** (`flashbeacon.s`) was placed at flash offset 0. It runs at
+the reset clock and emits `X` on serial A (no MMU/clock changes). In Run Mode
+(JP1 removed, power-cycled) it produced **0 bytes at every baud 300-115200 and
+both RTS states** — so the CPU is not executing flash offset 0.
+
+Reading logical `0x0000` from a RAM program with `MB0CR=/CS0` also returned
+`0xFF`, while reading the same flash through the data-segment window at
+physical `0x100000` returned the expected bytes. So the flash is reachable via
+the window but not via the root segment at reset.
+
+`DCRabbit_10` research (see [status-and-todo.md](status-and-todo.md#what-the-dynamic-c-10-sources-say-reference))
+shows reset `PC=0` should fetch from `/CS0` flash **only if `SYSCFG0` is low**.
+If `SYSCFG0` is strapped high, reset MB0 is `/CS3` (internal SRAM, 16-bit) and
+the CPU starts in SRAM instead — which would explain the beacon result. This
+needs the RCM5700 module schematic to confirm. Other candidates: the
+programming cable/JP1 holding SMODE, or an invalid ID block.
+
 ## Dead ends worth remembering
 
 * The FT232R + hub USB drop is real and needs a direct port / better adapter.
@@ -138,3 +173,7 @@ Rabbit 5000 leaves bootstrap / boots from flash. See
 * Classic `DATASEG` silently truncates >8-bit pages; use DATASEGL/H.
 * The `ramcr` value must be `0x43` for the RCM5700; the default `0x45` hangs at
   the pilot handshake.
+* The FT232R/JP1 SMODE control is flaky without the physical jumper; do not
+  rely on RTS alone.
+* Hand-written asm must put a `nop` after every I/O access (SDCC does this for
+  the Rabbit BSI/IOI erratum); without it the register writes are unreliable.

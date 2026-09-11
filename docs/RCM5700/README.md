@@ -60,7 +60,10 @@ rcm5700/                 helper programs and build scripts (see building.md)
   readtest.c             reads flash at several bank mappings
   memtest.c              probes which bank exposes the on-chip SRAM
   ramhello.c             minimal RAM-run test ("RCM5700 RAM OK")
+  flashtest.c            flash-run test ("RCM5700 FLASH OK"); runs from RAM
   tiny.s/.bin            hand-written asm boot test (emits 'A')
+  flashbeacon.s          minimal offset-0 beacon (emits 'X' at the reset clock)
+  serialcap.py           DTR/RTS-aware serial capture helper
   build.sh               build a RAM program (patches crt0 STACKSEG)
   buildflash.sh          build a flash program (patches crt0 for RCM5700)
 docs/RCM5700/            this documentation
@@ -69,8 +72,16 @@ docs/RCM5700/            this documentation
 ## Important warning
 
 The flash programmer is **destructive**. The self-test `rcmflash.c` and the
-flashing flow erase flash sectors. During development the first flash sector
-of the test board was erased/overwritten, so the board's original firmware no
-longer boots. Re-flash the original image with Dynamic C / the Digi RFU if you
-need it back. Cold-boot mode (the SMODE bootstrap) is in the CPU ROM and is
-unaffected, so the board can always be re-flashed.
+flashing flow erase flash sectors, and during development the first flash
+sector of the test board was overwritten, so the board's original firmware no
+longer boots. Note that at present **no** image at flash offset 0 boots (see
+[status-and-todo.md](status-and-todo.md)); the board can still be re-flashed
+because cold-boot mode (the SMODE bootstrap) lives in the CPU ROM.
+
+## Handing this off
+
+Start with [status-and-todo.md](status-and-todo.md): it has the current
+working/not-working state, the Dynamic C 10 register reference, and the
+concrete next steps for the flash-boot problem. Then
+[investigation-log.md](investigation-log.md) for the full history and the
+"dead ends worth remembering".

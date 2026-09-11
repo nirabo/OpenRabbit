@@ -31,9 +31,30 @@
   (`rcm5700/flashbeacon.s`) produced **0 bytes at every baud (300-115200) and
   both RTS states**, so the CPU is not executing flash offset 0 at all.
 
+### Reproducing the flash-boot test
+
+```sh
+# Build the beacon
+cd rcm5700
+sdasrab -o flashbeacon.rel flashbeacon.s
+sdcc -mr2k --no-std-crt0 flashbeacon.rel -o flashbeacon.ihx
+objcopy -I ihex -O binary flashbeacon.ihx flashbeacon.bin
+cd ..
+
+# Flash it (JP1 1-2 installed = Program Mode)
+./src/openrabbitfu --verbose --slow --ramcr 0x43 \
+    --programmer rcm5700/rcmprog.bin rcm5700/flashbeacon.bin /dev/ttyUSB0
+
+# Remove JP1 1-2, power-cycle, then capture (expect 'X' if flash boot works)
+python3 rcm5700/serialcap.py -b 2400 -t 5 /dev/ttyUSB0
+```
+
+`serialcap.py` drives DTR/RTS itself so it does not hold the target in reset.
+
 ## What the Dynamic C 10 sources say (reference)
 
-From `DCRabbit_10`:
+Reference tree: `https://github.com/digidotcom/DCRabbit_10` (a local clone was
+used at `~/projects/sandbox/DCRabbit_10`). From it:
 
 * On reset with **`SYSCFG0` low**, `PC=0` already fetches from `/CS0` flash
   (8-bit, 4 wait) — no MMU write is needed to *begin* executing at offset 0.
