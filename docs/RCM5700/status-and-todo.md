@@ -82,6 +82,10 @@ The evidence says no. Candidates, in rough order of likelihood:
    instead of the documented `55 AA 55 AA 55 AA`. The CPU does not read the ID
    block to boot, but DC/RFU do; writing a valid ID block (`Utilities/Write_ID`)
    is worth trying.
+7. **Try SDCC 4.6.0's Rabbit 5000 port.** SDCC 4.6.0 (2026-06) added an
+   experimental `r5k` port and `__far` 1 MB address-space support, which may
+   handle the RCM5700 memory map more directly than the `r2k` port we used. See
+   [future-and-ecosystem.md](future-and-ecosystem.md).
 
 If offset 0 *does* execute but the LED/serial simply don't show it, the
 flash-marker test (item 4) is the way to prove it.

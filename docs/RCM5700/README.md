@@ -56,6 +56,7 @@ with the official FT232R USB programming cable on `/dev/ttyUSB0`:
 * [dynamic-c-wine.md](dynamic-c-wine.md) — installing Dynamic C 10 under Wine and building real RCM5700 images.
 * [investigation-log.md](investigation-log.md) — how we got here, with evidence.
 * [status-and-todo.md](status-and-todo.md) — what works, what does not, next steps.
+* [future-and-ecosystem.md](future-and-ecosystem.md) — Linux toolchain options and the platform's EOL status (2026).
 * [troubleshooting.md](troubleshooting.md) — common failure modes.
 
 ## Directory layout
@@ -101,5 +102,8 @@ because cold-boot mode (the SMODE bootstrap) lives in the CPU ROM.
 Start with [status-and-todo.md](status-and-todo.md): it has the current
 working/not-working state, the Dynamic C 10 register reference, and the
 concrete next steps for the flash-boot problem. Then
+[dynamic-c-wine.md](dynamic-c-wine.md) for building real RCM5700 images and
+[future-and-ecosystem.md](future-and-ecosystem.md) for the toolchain landscape
+(including SDCC 4.6.0's experimental Rabbit 5000 port), and
 [investigation-log.md](investigation-log.md) for the full history and the
 "dead ends worth remembering".
