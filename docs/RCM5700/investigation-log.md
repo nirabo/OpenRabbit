@@ -165,6 +165,64 @@ the CPU starts in SRAM instead — which would explain the beacon result. This
 needs the RCM5700 module schematic to confirm. Other candidates: the
 programming cable/JP1 holding SMODE, or an invalid ID block.
 
+## 10. Dynamic C 10 research and the SMODE problem
+
+### 10a. What DC10's sources establish
+
+Read of `DCRabbit_10` (see [status-and-todo.md](status-and-todo.md) for the
+full reference):
+
+* For a parallel-flash RCM5700 the BIOS root code is at **physical flash
+  offset 0** (`memory_layout.lib:311-330`, `ORG_FLASH_START 0x0`) and the first
+  emitted code there is `_biosentry_` (`StdBios.c:1556`): `MACR=0x00` + 2 nops,
+  `MMIDR=0x80`, `EDMR=0xC0`. The serial-flash triplet trampoline and the 16-bit
+  trampoline are both compiled out for the RCM5700.
+* **Nothing writes `MB0CR` before the first fetch.** The BIOS *assumes* reset
+  already maps `/CS0` into bank 0. On the Rabbit 5000 that is selected by the
+  `SYSCFG0`/`SYSCFG1` pins (`SYSCFG0=0` -> MB0 = `/CS0`, 8-bit, 4 wait;
+  `SYSCFG0=1` -> MB0 = `/CS3` internal SRAM, 16-bit). `SYSCFG` appears nowhere
+  in the DC10 tree - it is hardware only.
+* `dkSetMMU` then sets `MECR=0x20`, `SEGSIZE=0xD6`, `DATASEGL/H=0x0100`,
+  `MB0CR=0x00`, `MB1CR=0x00`, `MB2CR=0xC3`, `MB3CR=0x00`.
+* The only place that explicitly re-maps bank 0 to flash and jumps to 0 is the
+  pilot, after a host bootstrap (`ColdBoot/PILOT.C:650-668`).
+* The ID-block marker is `55 AA 55 AA 55 AA` (`IDBLOCK.LIB:104`); the board
+  read `4A 00 4A 00 4A 00` at `0xFFFFA`, so the ID block is not valid.
+* DC10 cannot be ported to Linux: the compiler is closed-source Windows, and
+  the library sources are Z-World-specific (see status-and-todo.md).
+
+### 10b. SMODE is not under RTS control on this board
+
+The serial beacon (`flashbeacon.s`) was replaced by a **baud-independent**
+STATUS test: `statusbeacon.s` drives STATUS high and loops; `statusblink.s`
+toggles STATUS slowly; `statusread.py` reads STATUS via the cable's DSR (the
+same line Dynamic C uses). Results in "Run Mode" (RTS asserted):
+
+```
+statusbeacon: DSR high (STATUS not driven) -> offset-0 code did not run
+statusblink : one transient, then steady -> no toggle
+```
+
+Crucially, after a Run-Mode reset the target still **executed bootstrap
+triplets**: sending `GOCR=0x20` then `GOCR=0x30` via the triplet protocol made
+DSR follow the writes exactly. In Run Mode the bootstrap ROM is not running, so
+the triplets would be ignored. Conclusion: **the board was in bootstrap
+(Program Mode) during the tests, and asserting RTS does not switch it to Run
+Mode.** The mode is strapped by JP1, not (reliably) by the cable.
+
+This invalidates the earlier "Run Mode" beacon tests: flash offset 0 was never
+executed because the CPU was waiting in the bootstrap ROM. The earlier
+"JP1 removed, power-cycled" test may have been defeated by the cable still
+holding SMODE.
+
+### 10c. Consequences
+
+* The next boot test must guarantee true Run Mode (JP1 + no cable influence),
+  ideally powered from the AC adapter with a separate serial connection.
+* A definitive, cable-independent test is to have the offset-0 image erase and
+  program a marker into a spare flash sector and read it back with the
+  programmer.
+
 ## Dead ends worth remembering
 
 * The FT232R + hub USB drop is real and needs a direct port / better adapter.

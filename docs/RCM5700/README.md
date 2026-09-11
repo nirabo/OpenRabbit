@@ -14,8 +14,10 @@ RAM-resident flash programmer built for it.
 | Run the flashed program after `rabbit_start` | **Not working yet** |
 
 The flash programming itself is complete and verified; the open issue is
-getting the Rabbit 5000 to *boot* the freshly flashed image (see
-[status-and-todo.md](status-and-todo.md)).
+getting the Rabbit 5000 to *boot* the freshly flashed image. The current
+evidence is that the board stays in the SMODE bootstrap during our tests
+(RTS does not switch it to Run Mode), so flash offset 0 is never executed.
+See [status-and-todo.md](status-and-todo.md) and investigation-log section 10.
 
 ## Quick start
 
@@ -63,6 +65,9 @@ rcm5700/                 helper programs and build scripts (see building.md)
   flashtest.c            flash-run test ("RCM5700 FLASH OK"); runs from RAM
   tiny.s/.bin            hand-written asm boot test (emits 'A')
   flashbeacon.s          minimal offset-0 beacon (emits 'X' at the reset clock)
+  statusbeacon.s         offset-0 test: drives STATUS high if it runs
+  statusblink.s          offset-0 test: toggles STATUS slowly if it runs
+  statusread.py          reads STATUS (cable DSR) after a reset
   serialcap.py           DTR/RTS-aware serial capture helper
   build.sh               build a RAM program (patches crt0 STACKSEG)
   buildflash.sh          build a flash program (patches crt0 for RCM5700)
