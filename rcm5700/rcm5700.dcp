@@ -1,0 +1,17 @@
+This is a machine generated file.
+Modifications by hand must be made carefully at one's own risk.
+Deleting an entry will result in factory default for that entry.
+----------------------------------------------------------------
+[Targetless Compile]
+Board ID=0x3100
+CPU ID=5000
+CPU Revision=0
+Crystal Speed MHz=25.0000
+RAM Size KBytes=128
+Flash Size KBytes=1024
+Description=RCM5700, 50MHz, 128K SRAM, 1M Flash
+Macros=CLK_DBL=1;BRD_OPT0=0x20;MD0=0x1;MD0_ID=0x1DA;MD0_TYPE=0x22;MD0_SIZE=0x100;MD0_SECSIZE=0x80;MD0_SECNUM=0x13;MD0_SPEED=0x46;MD0_MBC=0x0;MD2=0x1;MD2_ID=0x0;MD2_TYPE=0x0;MD2_SIZE=0x20;MD2_SECSIZE=0x0;MD2_SECNUM=0x0;MD2_SPEED=0xF;MD2_MBC=0xC3
+[Include BIOS]
+Include BIOS=1
+[Compiler Options]
+BIOS Memory Mode=2

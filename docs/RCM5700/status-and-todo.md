@@ -5,169 +5,112 @@
 * **Identification.** `--ramcr 0x43` connects to the RCM5700W and reports
   `CPU: 0x0300 (Rabbit 5000)` plus flash/RAM timing info.
 * **RAM execution.** `--ram` loads an SDCC program into the 128 KB on-chip SRAM
-  and runs it; serial output is visible with `--serialout`.
+  and runs it; serial output is visible with `--serialout`. Confirmed with
+  `ramhello.bin` (`RCM5700 RAM OK`) and with `ledblink.bin` blinking the DS1 LED
+  on PD0.
 * **Flash programming.** `--programmer rcm5700/rcmprog.bin` erases, programs and
-  fully verifies the S29AL008D. The JEDEC ID (`01 DA`), sector erase and byte
-  program are all confirmed.
-* **Flash programs that run from RAM.** `buildflash.sh` + `flashtest.c` produce
-  a program with a valid RCM5700 stack (on-chip SRAM via `MB2CR`) that prints
-  correctly when loaded with `--ram`.
-* **Booting from flash (the breakthrough).** A program at flash offset 0 *does*
-  execute, but only in true Run Mode: **JP1 pins 1-2 removed** and the board
-  powered from **J6 (+5 V)**, not USB. `rcm5700/bootbeacon.s` (a hand-written
-  offset-0 image) makes the STATUS pin toggle, read via the cable's DSR. The
-  earlier failures were entirely the mode: RTS does **not** control SMODE on
-  this board (JP1 does), and USB power reboots the board ~2 s after startup in
-  Run Mode.
+  fully verifies the S29AL008D. JEDEC ID (`01 DA`), sector erase, byte program
+  and read-back all confirmed.
+* **Building real Dynamic C images.** Dynamic C 10.72E is installed under Wine
+  and a **targetless** build produces a proper RCM5700 image with the real
+  Dynamic C BIOS. See [dynamic-c-wine.md](dynamic-c-wine.md). DC-built images
+  (`FLASHLED01.bin`, `dchello.bin`) flash and verify correctly.
+
+## Not working (the core problem)
+
+* **Flash boot does not happen.** A program at flash offset 0 is **not**
+  executed on reset, in Program Mode or Run Mode:
+  * `rcm5700/ledblink.s` (bare asm at offset 0) blinks PD0 when loaded into RAM
+    by the pilot, but does **not** blink when flashed and the board is reset.
+  * DC's `FLASHLED01.bin` (with the real BIOS) does not blink PD0 from flash.
+  * `rcm5700/statusflash.c` (DC) / `bootbeacon.s` (asm) appeared to toggle
+    STATUS, but that is an **artifact**: `dchello.c` (which never touches
+    STATUS/GOCR) toggles STATUS identically in Run Mode. Do **not** trust the
+    STATUS/DSR line as a "program ran" indicator in Run Mode.
+  * Serial output from a flash boot was never observed either (but this is
+    moot until offset 0 executes at all).
+
+## What was tried for flash boot
+
+* **JP1.** Program Mode = JP1 pins 1-2 jumpered; Run Mode = jumper removed
+  (RCM5700/RCM6700 User's Manual 90001191). Confirmed: with JP1 installed the
+  board bootstraps (coldloader/pilot work); with it removed the board does not
+  respond to bootstrap triplets.
+* **Power.** J6 is the DC input jack (**+5 V DC**; module runs on 3.3 V from the
+  on-board regulator). USB power makes the board reboot ~2 s after startup in
+  Run Mode, so J6 was used.
+* **Reset vs power-cycle.** Both the RESET button and a full J6 power-cycle
+  (JP1 removed) fail to run the flashed image.
+* **RTS/SMODE.** RTS does **not** control SMODE on this board; JP1 does.
 
 ## Fixed during bring-up
 
 * **Serial framing.** `tty_setbaud()` used `CSTOPB` (2 stop bits). The Rabbit
-  bootstrap needs 8N1; with 2 stop bits the coldload triplets were frequently
-  rejected. Removed.
-* **SMODE / RTS.** The programming cable can drive SMODE from RTS. OpenRabbit
-  now sets it (`rabbit_smode()`), though it proved unreliable without the JP1
-  jumper.
-* **`--baud <n>`** added for `--serialout` diagnostics.
-
-## Not working
-
-* **Serial output from a flash boot.** `boothello.s` runs (STATUS goes high)
-  but no bytes reach the host on any baud 300-115200, with or without waiting
-  on `SASR`. The offset-0 asm sets `GCSR=0x08`, `MTCR=0x0C`, `GCDR=0x07`,
-  `TACR=0`, `TAPR=1`, `TACSR=1`, `TAT4R=40`, `PCFR=0x40`, `SACR=0x01`. Either
-  the baud clock still is not running or serial A TX is not routed to the
-  cable in Run Mode. This is the next thing to solve; STATUS is the only
-  reliable output channel from a flash boot so far.
-* **SDCC programs from flash.** `ramhello-flash.bin` (built with
-  `buildflash.sh`) does not run from a cold flash boot, most likely because the
-  SDCC crt0 only sets `MB2CR`/`SEGSIZE`/`STACKSEG` and relies on a BIOS that
-  sets up `MECR`, the bank control registers and the clock. A DC-BIOS-style
-  preamble (like `boothello.s`) is needed in front of SDCC programs.
-
-### Reproducing the flash-boot test
-
-```sh
-# Build the beacon
-cd rcm5700
-sdasrab -o flashbeacon.rel flashbeacon.s
-sdcc -mr2k --no-std-crt0 flashbeacon.rel -o flashbeacon.ihx
-objcopy -I ihex -O binary flashbeacon.ihx flashbeacon.bin
-cd ..
-
-# Flash it (JP1 1-2 installed = Program Mode)
-./src/openrabbitfu --verbose --slow --ramcr 0x43 \
-    --programmer rcm5700/rcmprog.bin rcm5700/flashbeacon.bin /dev/ttyUSB0
-
-# Remove JP1 1-2, power-cycle, then capture (expect 'X' if flash boot works)
-python3 rcm5700/serialcap.py -b 2400 -t 5 /dev/ttyUSB0
-```
-
-`serialcap.py` drives DTR/RTS itself so it does not hold the target in reset.
-
-### Baud-independent STATUS test
-
-```sh
-# Build the STATUS beacon/blink (small hand-written asm at flash offset 0)
-cd rcm5700
-for f in statusbeacon statusblink; do
-    sdasrab -o $f.rel $f.s
-    sdcc -mr2k --no-std-crt0 $f.rel -o $f.ihx
-    objcopy -I ihex -O binary $f.ihx $f.bin
-done
-cd ..
-
-# Flash one of them, then read STATUS (cable DSR) after a reset
-./src/openrabbitfu --slow --ramcr 0x43 \
-    --programmer rcm5700/rcmprog.bin rcm5700/statusblink.bin /dev/ttyUSB0
-python3 rcm5700/statusread.py --rts run --repeat 12 /dev/ttyUSB0
-```
-
-`statusbeacon.s` drives STATUS high and holds it; `statusblink.s` toggles it
-slowly. If the CPU executes flash offset 0 the DSR line must follow; in our
-tests it did not, and the target still responded to GOCR bootstrap triplets
-(see investigation-log section 10).
-
-## What the Dynamic C 10 sources say (reference)
-
-Reference tree: `https://github.com/digidotcom/DCRabbit_10` (a local clone was
-used at `~/projects/sandbox/DCRabbit_10`). From it:
-
-* On reset with **`SYSCFG0` low**, `PC=0` already fetches from `/CS0` flash
-  (8-bit, 4 wait) — no MMU write is needed to *begin* executing at offset 0.
-  If `SYSCFG0` is strapped **high**, reset MB0 is `/CS3` (internal SRAM,
-  16-bit) and the CPU does not fetch from flash.
-* The RCM5700 BIOS entry (`Lib/Rabbit4000/BIOSLIB/StdBios.c:1556`
-  `_biosentry_`) sets `MACR=0x00`, `MMIDR=0x80`, `EDMR=0xC0`.
-* `dkSetMMU` (`StdBios.c:1707`) sets `MECR=0x20`; the bank values are
-  `MB0CR=0x00` (`/CS0` flash, 4 wait), `MB1CR=0x00`, `MB2CR=0xC3`
-  (`/CS3` on-chip SRAM, 0 wait), `MB3CR=0x00`; `SEGSIZE=0xD6`,
-  `DATASEGL/H=0x0100` (data segment -> physical `0x100000`).
-* No address-line inversion (`MB0CR_INVRT_A18/A19` are 0 for `RCM5700_SERIES`);
-  the parallel flash is 8-bit (`BRD_OPT0=0x20`, `_ENABLE_16BIT_FLASH_` off);
-  ID block `flashMBC=0x00`, `ramMBC=0xC3`.
-
-## Why not just port Dynamic C 10 to Linux?
-
-This came up as a shortcut. It is not viable:
-
-* `DCRabbit_10` is the **library/source tree**, not a toolchain. The compiler
-  (`dccl_cmp.exe`) is closed-source and Windows-only; the `ColdBoot/Makefile`
-  invokes it directly.
-* `Lib/Rabbit4000/*.LIB` and `ColdBoot/*.C` use Z-World compiler extensions
-  (`#asm`, `root`/`xmem`, `far`, `_cexpr`, `//@` triplet directives) that
-  SDCC/GCC cannot compile.
-* The `Bios/*.bin` files are Rabbit **target** binaries, not host tools; they
-  do not need "Linux compatibility". OpenRabbit already ships its own
-  equivalents (`coldboot/coldload.bin`, `coldboot/pilot.bin`).
-
-What DC10 *does* give us is the authoritative **boot contract** and the
-**detection technique**, both captured above and in
-[investigation-log.md](investigation-log.md). Use those, not the compiler.
+  bootstrap needs 8N1; removed. (`src/myio.c`)
+* **SMODE / RTS.** `rabbit_smode()` added, but unreliable without JP1.
+* **`--baud <n>`** added for `--serialout`.
+* **`buildflash.sh`** patches the SDCC crt0 `MB2CR 0x05 -> 0x43`.
 
 ## Next steps
 
-The mode question is settled: with **JP1 1-2 removed** and **J6 +5 V power**,
-flash offset 0 executes. The remaining work is (a) getting serial out of a
-flash boot and (b) getting full SDCC programs to run.
+The single open question is **"does the CPU execute flash offset 0 at all?"**.
+The evidence says no. Candidates, in rough order of likelihood:
 
-1. **Fix serial output from a flash boot.** `boothello.s` reaches its STATUS
-   instruction but emits nothing. Candidates, in order:
-   * The baud clock is still not running. Verify `GCSR`/`GCDR`/`MTCR` and the
-     Timer A setup (`TACR`/`TAPR`/`TACSR`/`TAT4R`) against a Dynamic C image
-     that prints in Run Mode.
-   * Serial A TX is not routed to the cable in Run Mode. Test by using a
-     separate UART on another port (e.g. serial B on PC4/PC5) or by probing
-     PC6 with a scope/logic analyser.
-   * `SACR` value (`0x00` vs `0x01`) and `PCFR` bit 6.
-2. **Build a DC-BIOS-style boot preamble in front of SDCC programs.** The SDCC
-   crt0 only sets `MB2CR`/`SEGSIZE`/`STACKSEG`; it relies on a BIOS to set
-   `MECR`, `MB0..3CR`, `DATASEG` and the clock. `boothello.s` shows the
-   preamble; the next step is to jump from it into an SDCC image (linked at a
-   small offset) or to patch the crt0.
-3. **Cable-independent marker test** (still worth doing as a cross-check): have
-   the offset-0 image erase and program a marker into a spare flash sector
-   (e.g. `0x80000`, blank per the scan), then read it back with the programmer.
-4. **Verify the ID block** at the top of flash (marker `55 AA 55 AA ...`).
-   `rcm5700/rcmflash.c` read `4A 00 4A 00 4A 00` at `0xFFFFA`, which is not the
-   documented marker. This does not affect the hardware boot but breaks
-   Dynamic C / RFU identification.
+1. **Reset mapping / `SYSCFG0`.** On the Rabbit 5000, `SYSCFG0` low => reset MB0
+   = `/CS0` (parallel flash, 8-bit, 4 wait); `SYSCFG0` high => MB0 = `/CS3`
+   internal SRAM. If the RCM5700 module straps `SYSCFG0` high, a bare program at
+   flash offset 0 can never boot. **Get the RCM5700 module schematic / MiniCore
+   datasheet and check the `SYSCFG0`/`SYSCFG1` straps.**
+2. **Flash chip select / address inversion.** Confirm the flash is really on
+   `/CS0` with no A18/A19 inversion. Dynamic C's `BOARDTYPES.LIB` says
+   `CS_FLASH=CS0OE0`, `MB0CR_INVRT=0`, 8-bit (`BRD_OPT0=0x20`), but the board
+   could differ. Cross-check with the module schematic.
+3. **Reset vector location.** The S29AL008D is a *top-boot* device. Confirm the
+   CPU reset vector is at physical 0 and not at the top of the flash (or that
+   the flash isn't remapped). The original factory firmware occupied
+   `0x00000-0x06FFF` and `0xF0000-0xFFFFF`; try flashing a blink image at the
+   **top** of the flash too (requires a programmer tweak to write at an offset).
+4. **Definitive cable-independent test.** Have the offset-0 image erase and
+   program a marker into a spare flash sector (e.g. `0x80000`, blank per the
+   scan) and read it back with the programmer. A marker proves execution; a
+   blank sector proves the CPU never fetched offset 0. This removes all
+   dependency on STATUS/serial/LED.
+5. **Compare against a known-good image.** Flash a DC-built image with DC's own
+   RFU (`Utilities/Rfu.exe`) instead of OpenRabbit, in case the raw programming
+   order/ID block matters.
+6. **ID block.** `rcm5700/rcmflash.c` read `4A 00 4A 00 4A 00` at `0xFFFFA`
+   instead of the documented `55 AA 55 AA 55 AA`. The CPU does not read the ID
+   block to boot, but DC/RFU do; writing a valid ID block (`Utilities/Write_ID`)
+   is worth trying.
+
+If offset 0 *does* execute but the LED/serial simply don't show it, the
+flash-marker test (item 4) is the way to prove it.
+
+## What the Dynamic C 10 sources establish (reference)
+
+* For a parallel-flash RCM5700 the BIOS root is at **physical flash offset 0**
+  (`Lib/Rabbit4000/memory_layout.lib:311-330`, `ORG_FLASH_START 0x0`) and the
+  first code there is `_biosentry_` (`StdBios.c:1556`): `MACR=0x00` + 2 nops,
+  `MMIDR=0x80`, `EDMR=0xC0`.
+* **Nothing writes `MB0CR` before the first fetch.** The BIOS assumes reset
+  already maps `/CS0` into bank 0 (via `SYSCFG0`). `SYSCFG` appears nowhere in
+  the DC10 tree - it is hardware only.
+* `dkSetMMU` (`StdBios.c:1707`) sets `MECR=0x20`, `SEGSIZE=0xD6`,
+  `DATASEGL/H=0x0100`, `MB0CR=0x00`, `MB1CR=0x00`, `MB2CR=0xC3`, `MB3CR=0x00`.
+* The only code that explicitly re-maps bank 0 to flash and jumps to 0 is the
+  pilot, after a host bootstrap (`ColdBoot/PILOT.C:650-668`).
+* DC10 cannot be ported to Linux (closed-source Windows compiler,
+  Z-World-specific library sources) - but it **runs under Wine**, which is what
+  we use.
 
 ## Cleanups / improvements
 
-* Replace the binary `STACKSEG`/`MBxCR` patching with a proper RCM5700
-  `crt0`/linker configuration that matches the BIOS's `MECR`/`SEGSIZE`/
-  `DATASEG` values.
-* Auto-detect the RCM5700 instead of requiring explicit `--ramcr 0x43` and
-  `--programmer`.
-* Embed the programmer binary in `openrabbitfu` (like the built-in
-  coldload/pilot) so no external file is needed.
-* Program in larger chunks and/or word-wise; the current byte-at-a-time JEDEC
-  programming is slow.
-* Add an option to read/dump the flash (the programmer already supports `'R'`).
+* Embed the programmer binary in `openrabbitfu`.
+* Auto-detect the RCM5700 instead of requiring `--ramcr 0x43` / `--programmer`.
+* Add a flash read/dump option (the programmer already supports `'R'`).
+* Add a "flash at offset" option to enable the top-of-flash test (item 3).
 
 ## Known-good workaround
 
-For development that does not need persistence, use `--ram` to run programs
-directly from the on-chip SRAM. For persistent images, use Dynamic C 10 / the
-Digi RFU (e.g. under Wine).
+Use `--ram` to run programs from the on-chip SRAM (works reliably). For
+persistent images, Dynamic C 10 / the Digi RFU can be run under Wine.

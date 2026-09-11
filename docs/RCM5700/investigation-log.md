@@ -259,8 +259,39 @@ a cold flash boot: the SDCC crt0 only sets `MB2CR`/`SEGSIZE`/`STACKSEG` and
 relies on a BIOS to set `MECR`, the bank registers and the clock. A
 DC-BIOS-style preamble in front of SDCC programs is the next step.
 
+## 13. Dynamic C under Wine, and the flash-boot result (corrects section 11)
+
+Dynamic C 10.72E was installed under Wine (silent NSIS) and the CLI compiler
+works. A **targetless** build recipe produces a real RCM5700 image with the
+Dynamic C BIOS; see [dynamic-c-wine.md](dynamic-c-wine.md). DC-built images
+flash and verify correctly with OpenRabbit.
+
+They do **not** run from flash, and neither does a bare asm image. The
+definitive test used the **DS1 LED on PD0** (independent of serial and of the
+STATUS/DSR line):
+
+* `rcm5700/ledblink.s` loaded into RAM by the pilot -> **LED blinks** (so the
+  LED, the pin, and the program are correct).
+* The same image flashed at offset 0, board reset (JP1 removed, J6 power) ->
+  **no blink**. DC's `FLASHLED01.bin` (with the real BIOS) also does not blink.
+* `statusflash.c` (DC) and `bootbeacon.s` (asm) appeared to toggle STATUS, but
+  `dchello.c` (which never touches STATUS/GOCR) toggles it identically in Run
+  Mode. **The STATUS/DSR toggle is an artifact in Run Mode** and must not be
+  used as a "program ran" indicator.
+
+So **section 11's conclusion was wrong**: flash offset 0 is *not* executed on
+reset, in either mode, with either a RESET-button or a full power-cycle. The
+open question is why. Leading candidates: the reset memory mapping
+(`SYSCFG0` strapping), the flash chip select or address inversion, or the reset
+vector being at the top of the top-boot flash. See
+[status-and-todo.md](status-and-todo.md) for the full analysis and the
+cable-independent **flash-marker test** that will settle it.
+
 ## Dead ends worth remembering
 
+* **The STATUS/DSR line is not a valid "program ran" signal in Run Mode** - it
+  toggles even for a program that never writes GOCR. Only the LED (PD0) or a
+  flash self-write marker are trustworthy.
 * The FT232R + hub USB drop is real and needs a direct port / better adapter.
 * `--ramcr` only touches MB0CR/MB1CR; 16-bit mode is in MACR. (Not relevant for
   the RCM5700, which is 8-bit.)

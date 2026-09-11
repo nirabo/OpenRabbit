@@ -11,17 +11,19 @@ RAM-resident flash programmer built for it.
 | Identify the RCM5700 (CPU + flash info) | **Works** |
 | Run an SDCC program from the on-chip 128 KB SRAM | **Works** |
 | Erase / program / verify the S29AL008D flash | **Works** |
-| Execute a program at flash offset 0 (true Run Mode) | **Works** |
-| Serial output from a flash boot | **Not working yet** |
+| Build a real Dynamic C RCM5700 image (DC under Wine) | **Works** |
+| Execute a program at flash offset 0 (flash boot) | **Not working** |
 
-The flash programming itself is complete and verified. Flash **boot** works too:
-with **JP1 pins 1-2 removed** (Run Mode) and the board powered from **J6
-(+5 V)**, a program at flash offset 0 executes (`rcm5700/bootbeacon.s` toggles
-STATUS). Two things defeated earlier attempts: RTS does **not** control SMODE
-(JP1 does), and USB power reboots the board ~2 s after startup in Run Mode.
-The open issue is now getting **serial output** from a flash boot and running
-full SDCC programs (which need a DC-BIOS-style preamble). See
-[status-and-todo.md](status-and-todo.md).
+The flash programming is complete and verified, and Dynamic C 10 runs under
+Wine and builds proper RCM5700 images ([dynamic-c-wine.md](dynamic-c-wine.md)).
+**But flash boot does not happen**: a program at flash offset 0 is never
+executed on reset, in either Program or Run Mode. A bare asm `ledblink` blinks
+PD0 when loaded into RAM but not when flashed; the STATUS/DSR "it toggles"
+signal was an artifact (a DC program that never touches STATUS toggles it too).
+The open question is *why* offset 0 is not fetched - most likely the reset
+memory mapping (`SYSCFG0` strapping) or the flash chip-select/inversion. See
+[status-and-todo.md](status-and-todo.md) for the full analysis and the
+flash-marker test that will settle it.
 
 ## Quick start
 
@@ -51,6 +53,7 @@ with the official FT232R USB programming cable on `/dev/ttyUSB0`:
 * [openrabbit-changes.md](openrabbit-changes.md) — the host-side changes (`--ram`, `--programmer`).
 * [flash-protocol.md](flash-protocol.md) — the serial protocol used by the RAM programmer.
 * [building.md](building.md) — building the helper programs with SDCC, incl. the crt0 patch.
+* [dynamic-c-wine.md](dynamic-c-wine.md) — installing Dynamic C 10 under Wine and building real RCM5700 images.
 * [investigation-log.md](investigation-log.md) — how we got here, with evidence.
 * [status-and-todo.md](status-and-todo.md) — what works, what does not, next steps.
 * [troubleshooting.md](troubleshooting.md) — common failure modes.
@@ -69,10 +72,14 @@ rcm5700/                 helper programs and build scripts (see building.md)
   flashtest.c            flash-run test ("RCM5700 FLASH OK"); runs from RAM
   tiny.s/.bin            hand-written asm boot test (emits 'A')
   flashbeacon.s          minimal offset-0 beacon (emits 'X' at the reset clock)
-  statusbeacon.s         offset-0 test: drives STATUS high if it runs
-  statusblink.s          offset-0 test: toggles STATUS slowly if it runs
-  bootbeacon.s           offset-0 image: toggles STATUS + emits serial (proves flash boot)
+  ledblink.s             bare offset-0 image: blinks PD0 (the real flash-boot test)
+  statusbeacon.s         offset-0 test: drives STATUS high
+  statusblink.s          offset-0 test: toggles STATUS
+  bootbeacon.s           offset-0 image: toggles STATUS + emits serial
   boothello.s            offset-0 image: full DC-BIOS-style init, then prints "HI"
+  statusflash.c          Dynamic C test: toggles STATUS (GOCR)
+  dchello.c              Dynamic C test: prints over serial A (DC stdio)
+  rcm5700.dcp            Dynamic C project (target config) for targetless builds
   statusread.py          reads STATUS (cable DSR) after a reset
   serialcap.py           DTR/RTS-aware serial capture helper
   build.sh               build a RAM program (patches crt0 STACKSEG)
